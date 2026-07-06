@@ -39,7 +39,7 @@ $sort_column = isset($_POST['sort']) ? $_POST['sort'] : (isset($_GET['sort']) ? 
 $sort_order = isset($_POST['order']) ? $_POST['order'] : (isset($_GET['order']) ? $_GET['order'] : 'asc');
 $sort_order_sql = ($sort_order == 'desc') ? 'DESC' : 'ASC';
 
-$allowed_columns = ['id_pelanggan', 'nama', 'alamat', 'ip_modem', 'pppoe_profile', 'status_ping'];
+$allowed_columns = ['id_pelanggan', 'nama', 'alamat', 'ip_modem', 'pppoe_profile', 'status_ping', 'tanggal_daftar'];
 if (!in_array($sort_column, $allowed_columns)) {
     $sort_column = 'nama';
 }
@@ -62,10 +62,10 @@ $total_pages = ($total_rows > 0) ? ceil($total_rows / $limit) : 1;
 // Ambil data pelanggan
 $sql = "SELECT id_pelanggan, nama, alamat, ip_modem, caller_id, status_ping, pppoe_profile, live_latency,
                status_pembayaran, no_telp, service_name, status_berlangganan, router_id, id_billing,
-               uptime, last_logged_out 
+               uptime, last_logged_out, tanggal_daftar 
         FROM pelanggan 
         $where_clause
-        ORDER BY 
+        ORDER BY
             CASE WHEN status_ping = 'ONLINE' THEN 0 ELSE 1 END,
             $sort_column $sort_order_sql
         LIMIT :limit OFFSET :offset";
@@ -1025,8 +1025,11 @@ canvas {
         </button>
         
         <a href="index.php?page=import_csv" class="btn-sync" style="background: linear-gradient(135deg, #27ae60, #2ecc71); text-decoration: none; margin-left: 5px;">
-    📂 Import CSV
-</a>
+            📂 Import CSV
+        </a>
+        <button type="button" class="btn-sync" style="background: #9b59b6; margin-left: 5px;" onclick="openNotesModal()">
+            📝 Catatan
+        </button>
     </form>
     
     <div style="overflow-x: auto;">
@@ -1057,13 +1060,20 @@ canvas {
                                     '<?php echo htmlspecialchars(addslashes($pelanggan['status_berlangganan'] ?? 'Aktif')); ?>',
                                     '<?php echo htmlspecialchars(addslashes($pelanggan['router_id'] ?? '-')); ?>',
                                     '<?php echo htmlspecialchars(addslashes($pelanggan['uptime'] ?? '-')); ?>',
-                                    '<?php echo htmlspecialchars(addslashes($pelanggan['last_logged_out'] ?? '-')); ?>'
+                                    '<?php echo htmlspecialchars(addslashes($pelanggan['last_logged_out'] ?? '-')); ?>',
+                                    '<?php echo !empty($pelanggan['tanggal_daftar']) ? date('d M Y', strtotime($pelanggan['tanggal_daftar'])) : '-'; ?>'
                                 ); return false;" class="nama-link">
                                     <?php echo htmlspecialchars($pelanggan['nama']); ?>
                                 </a>
                                 <?php if(!empty($pelanggan['id_billing']) && $pelanggan['id_billing'] != '-'): ?>
                                     <div style="font-size: 11px; color: #95a5a6; margin-top: 4px;">
                                         🆔 <?php echo htmlspecialchars($pelanggan['id_billing']); ?>
+                                    </div>
+                                <?php endif; ?>
+
+                                <?php if(!empty($pelanggan['tanggal_daftar']) && $pelanggan['tanggal_daftar'] != '0000-00-00'): ?>
+                                    <div style="font-size: 11px; color: #7f8c8d; margin-top: 2px;">
+                                        📅 Daftar: <?php echo date('d M Y', strtotime($pelanggan['tanggal_daftar'])); ?>
                                     </div>
                                 <?php endif; ?>
                             </td>
@@ -1191,6 +1201,25 @@ canvas {
                 </div>
                 <div class="sync-progress-text" id="syncProgressText">Memulai sinkronisasi...</div>
             </div>
+
+            <div id="notesModal" class="modal">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h3>📝 Catatan Modem</h3>
+                        <button class="close-modal" onclick="closeModal('notesModal')">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <textarea id="notesContent" style="width: 100%; height: 200px; padding: 10px; border-radius: 8px; border: 1px solid #ddd;" 
+                        <?php echo ($_SESSION['role'] !== 'super_admin') ? 'readonly' : ''; ?>></textarea>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn-close btn-secondary" onclick="closeModal('notesModal')">Tutup</button>
+                        <?php if ($_SESSION['role'] == 'super_admin'): ?>
+                            <button class="btn-close" style="background: #27ae60;" onclick="saveNotes()">Simpan Catatan</button>
+                        <?php endif; ?>
+                    </div>
+                </div>
+            </div>
             
             <!-- Log Container -->
             <div class="sync-log-container" id="syncLogContainer">
@@ -1241,6 +1270,7 @@ canvas {
         <div class="modal-body">
             <div class="info-row"><div class="info-label">👤 Nama</div><div class="info-value" id="detailNama">-</div></div>
             <div class="info-row"><div class="info-label">📍 Alamat</div><div class="info-value" id="detailAlamat">-</div></div>
+            <div class="info-row"><div class="info-label">📅 Tanggal Daftar</div><div class="info-value" id="detailTanggalDaftar" style="font-weight: 500; color: #27ae60;">-</div></div>
             <div class="info-row"><div class="info-label">💰 Status Pembayaran</div><div class="info-value" id="detailPembayaran">-</div></div>
             <div class="info-row"><div class="info-label">📞 No. Telepon</div><div class="info-value" id="detailTelp">-</div></div>
             <div class="info-row"><div class="info-label">🔧 Service Name</div><div class="info-value" id="detailService">-</div></div>
@@ -1328,6 +1358,44 @@ let pingData = { ip: '', nama: '', router_id: '', history: [] };
 let pingInterval = null;
 let currentWhatsAppNumber = '';
 let syncInProgress = false;
+
+// --- FUNGSI UNTUK CATATAN MODEM ---
+
+function openNotesModal() {
+    // Mengambil isi catatan dari database via API
+    fetch('./pages/api_notes.php?action=get')
+        .then(res => res.json())
+        .then(data => {
+            // Memasukkan isi catatan ke dalam textarea
+            document.getElementById('notesContent').value = data.content;
+            // Menampilkan modal
+            document.getElementById('notesModal').style.display = 'block';
+        })
+        .catch(err => showToast('Gagal memuat catatan', 'error'));
+}
+
+function saveNotes() {
+    let content = document.getElementById('notesContent').value;
+    let formData = new FormData();
+    formData.append('action', 'save');
+    formData.append('content', content);
+
+    // Mengirim perubahan catatan ke database via API
+    fetch('pages/api_notes.php', { 
+        method: 'POST', 
+        body: formData 
+    })
+    .then(res => res.json())
+    .then(data => {
+        if(data.status === 'success') {
+            showToast('Catatan berhasil disimpan!', 'success');
+            closeModal('notesModal');
+        } else {
+            showToast('Gagal menyimpan: ' + (data.message || 'Error'), 'error');
+        }
+    })
+    .catch(err => showToast('Gagal menghubungi server', 'error'));
+}
 
 function showToast(message, type = 'info') {
     let existingToast = document.querySelector('.toast-notification');
@@ -1478,8 +1546,10 @@ function resetSearch() {
     document.getElementById('sortForm').submit();
 }
 
-function showDetailModal(nama, alamat, pembayaran, telp, service, statusLangganan, routerId, uptime, lastLogout) {
-    document.getElementById('detailNama').innerText = nama; document.getElementById('detailAlamat').innerText = alamat;
+function showDetailModal(nama, alamat, pembayaran, telp, service, statusLangganan, routerId, uptime, lastLogout, tanggalDaftar) {
+    document.getElementById('detailNama').innerText = nama; 
+    document.getElementById('detailAlamat').innerText = alamat;
+    document.getElementById('detailTanggalDaftar').innerText = tanggalDaftar && tanggalDaftar !== '-' ? tanggalDaftar : 'Belum ada data';
     let pembayaranHtml = (pembayaran.toLowerCase() == 'sudah bayar' || pembayaran.toLowerCase() == 'lunas') ? '<span class="status-badge lunas">✅ Lunas</span>' : '<span class="status-badge belum">⚠️ Belum Bayar</span>';
     document.getElementById('detailPembayaran').innerHTML = pembayaranHtml;
     
